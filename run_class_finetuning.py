@@ -212,7 +212,8 @@ def get_models(args):
 
 def get_dataset(args):
     if args.dataset == 'TUAB':
-        train_dataset, test_dataset, val_dataset = utils.prepare_TUAB_dataset("path/to/TUAB")
+        train_dataset, test_dataset, val_dataset = utils.prepare_TUAB_dataset("/home/ubuntu/sami-workbench-az/tuab/tuh_eeg_abnormal/v3.0.1/edf/processed")
+        # EEG FP1 not in the channel names
         ch_names = ['EEG FP1', 'EEG FP2-REF', 'EEG F3-REF', 'EEG F4-REF', 'EEG C3-REF', 'EEG C4-REF', 'EEG P3-REF', 'EEG P4-REF', 'EEG O1-REF', 'EEG O2-REF', 'EEG F7-REF', \
                     'EEG F8-REF', 'EEG T3-REF', 'EEG T4-REF', 'EEG T5-REF', 'EEG T6-REF', 'EEG A1-REF', 'EEG A2-REF', 'EEG FZ-REF', 'EEG CZ-REF', 'EEG PZ-REF', 'EEG T1-REF', 'EEG T2-REF']
         ch_names = [name.split(' ')[-1].split('-')[0] for name in ch_names]
@@ -336,7 +337,7 @@ def main(args, ds_init):
             checkpoint = torch.hub.load_state_dict_from_url(
                 args.finetune, map_location='cpu', check_hash=True)
         else:
-            checkpoint = torch.load(args.finetune, map_location='cpu')
+            checkpoint = torch.load(args.finetune, map_location='cpu', weights_only=False)
 
         print("Load ckpt from %s" % args.finetune)
         checkpoint_model = None
@@ -559,6 +560,28 @@ def main(args, ds_init):
 
 
 if __name__ == '__main__':
+    import sys
+    sys.argv[1:] = [
+        "--output_dir", "./checkpoints/finetune_tuab_base/",
+        "--log_dir", "./log/finetune_tuab_base",
+        "--model", "labram_base_patch200_200",
+        "--finetune", "./checkpoints/labram-base.pth",
+        "--weight_decay", "0.05",
+        "--batch_size", "64",
+        "--lr", "5e-4",
+        "--update_freq", "1",
+        "--warmup_epochs", "5",
+        "--epochs", "50",
+        "--layer_decay", "0.65",
+        "--drop_path", "0.1",
+        "--dist_eval",
+        "--save_ckpt_freq", "5",
+        "--disable_rel_pos_bias",
+        "--abs_pos_emb",
+        "--dataset", "TUAB",
+        "--disable_qkv_bias",
+        "--seed", "0"
+    ]
     opts, ds_init = get_args()
     if opts.output_dir:
         Path(opts.output_dir).mkdir(parents=True, exist_ok=True)
