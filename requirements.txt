@@ -1,3 +1,4 @@
+# NOTE Idk why but installing torch is crashing so just install it separately
 torch
 timm==0.4.12
 Pillow
@@ -7,9 +8,10 @@ numpy==1.26.4
 pytest
 requests
 einops
-deepspeed==0.4.0
+deepspeed
 scipy
 pyhealth==1.1.4
 h5py
 mne==1.4.2
 protobuf==3.20.3
+toolz

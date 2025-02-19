@@ -562,12 +562,12 @@ def main(args, ds_init):
 if __name__ == '__main__':
     import sys
     sys.argv[1:] = [
-        "--output_dir", "./checkpoints/finetune_tuab_base/",
-        "--log_dir", "./log/finetune_tuab_base",
+        "--output_dir", "./checkpoints/finetune_tuab_base_128/",
+        "--log_dir", "./log/finetune_tuab_base_128",
         "--model", "labram_base_patch200_200",
         "--finetune", "./checkpoints/labram-base.pth",
         "--weight_decay", "0.05",
-        "--batch_size", "64",
+        "--batch_size", "128",
         "--lr", "5e-4",
         "--update_freq", "1",
         "--warmup_epochs", "5",
@@ -580,6 +580,7 @@ if __name__ == '__main__':
         "--abs_pos_emb",
         "--dataset", "TUAB",
         "--disable_qkv_bias",
+        "--num_workers", "0",
         "--seed", "0"
     ]
     opts, ds_init = get_args()

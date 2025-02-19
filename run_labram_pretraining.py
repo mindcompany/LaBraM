@@ -170,18 +170,27 @@ def main(args):
     args.patch_size = patch_size
 
     # get dataset
-    # datasets with the same montage can be packed within a sublist
+    # datasets with the same montage can be packed within a sublist <-- NOTE: Not necessary anymore! Just go ham.
     datasets_train = [
-        ["path/to/dataset1", "path/to/dataset2"], # e.g., 64 channels for dataset1 and dataset2
-        ["path/to/dataset3", "path/to/dataset4"], # e.g., 32 channels for dataset3 and dataset4
+        '/home/ubuntu/sami-workbench-az/tuh2500/raw/tuar/v3.0.1/',
+        '/home/ubuntu/sami-workbench-az/tuh2500/raw/tusl/v2.0.1/',
+        '/home/ubuntu/sami-workbench-az/tuh2500/raw/tuep/v2.0.1/',
+        '/home/ubuntu/sami-workbench-az/tuh2500/raw/tusz/edf/dev/',
+        '/home/ubuntu/sami-workbench-az/tuh2500/raw/tusz/edf/train/',
     ]
     # time window for each sublist in dataset_train
-    # to ensure the total sequence length be around 256 for each dataset
+    # to ensure the total sequence length be around 256 for each dataset <-- NOTE: Also not necessary! Just pass in sequence length.
     time_window = [
         4, # set the time window to 4 so that the sequence length is 4 * 64 = 256
         8, # set the time window to 8 so that the sequence length is 8 * 32 = 256
     ]
-    dataset_train_list, train_ch_names_list = utils.build_pretraining_dataset(datasets_train, time_window, stride_size=800, start_percentage=0, end_percentage=1)
+
+    dataset_train_list, train_ch_names_list = utils.build_pretraining_dataset(
+        datasets_train,
+        sequence_length=256,
+        stride_size_seconds=4,
+        start_percentage=0.03, end_percentage=0.97  # NOTE: I just made these up (paper does use this though).
+    )
     # prepare visual tokenizer
     vqnsp = get_visual_tokenizer(args).to(device)
 
@@ -293,6 +302,10 @@ def main(args):
 
 
 if __name__ == '__main__':
+    import sys
+    sys.argv[1:] = [
+        
+    ]
     opts = get_args()
     if opts.output_dir:
         Path(opts.output_dir).mkdir(parents=True, exist_ok=True)

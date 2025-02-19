@@ -18,8 +18,8 @@ import glob
 from collections import defaultdict, deque
 import datetime
 import numpy as np
+from toolz import groupby
 from timm.utils import get_state_dict
-
 from pathlib import Path
 import argparse
 
@@ -37,7 +37,7 @@ import pandas as pd
 from sklearn.metrics import r2_score
 from sklearn.metrics import mean_squared_error
 from scipy.stats import pearsonr
-
+from transforms.preprocess import load_and_process_file
 
 standard_1020 = [
     'FP1', 'FPZ', 'FP2', 
@@ -632,7 +632,7 @@ def auto_load_model(args, model, model_without_ddp, optimizer, loss_scaler, mode
                 checkpoint = torch.hub.load_state_dict_from_url(
                     args.resume, map_location='cpu', check_hash=True)
             else:
-                checkpoint = torch.load(args.resume, map_location='cpu')
+                checkpoint = torch.load(args.resume, map_location='cpu', weights_only=False)
             model_without_ddp.load_state_dict(checkpoint['model']) # strict: bool=True, , strict=False
             print("Resume checkpoint %s" % args.resume)
             if 'optimizer' in checkpoint and 'epoch' in checkpoint:
@@ -700,14 +700,14 @@ def create_ds_config(args):
         writer.write(json.dumps(ds_config, indent=2))
 
 
-def build_pretraining_dataset(datasets: list, time_window: list, stride_size=200, start_percentage=0, end_percentage=1):
-    shock_dataset_list = []
-    ch_names_list = []
-    for dataset_list, window_size in zip(datasets, time_window):
-        dataset = ShockDataset([Path(file_path) for file_path in dataset_list], window_size * 200, stride_size, start_percentage, end_percentage)
-        shock_dataset_list.append(dataset)
-        ch_names_list.append(dataset.get_ch_names())
-    return shock_dataset_list, ch_names_list
+# def build_pretraining_dataset(datasets: list, time_window: list, stride_size=200, start_percentage=0, end_percentage=1):
+#     shock_dataset_list = []
+#     ch_names_list = []
+#     for dataset_list, window_size in zip(datasets, time_window):
+#         dataset = ShockDataset([Path(file_path) for file_path in dataset_list], window_size * 200, stride_size, start_percentage, end_percentage)
+#         shock_dataset_list.append(dataset)
+#         ch_names_list.append(dataset.get_ch_names())
+#     return shock_dataset_list, ch_names_list
 
 
 def get_input_chans(ch_names):
@@ -727,12 +727,14 @@ class TUABLoader(torch.utils.data.Dataset):
     def __len__(self):
         return len(self.files)
 
+    def label_from_path(self, path):
+        return path.split("_")[-1].split(".")[0]
+
     def __getitem__(self, index):
-        sample = pickle.load(open(os.path.join(self.root, self.files[index]), "rb"))
-        X = sample["X"]
+        X = load_and_process_file(os.path.join(self.root, self.files[index]))
         if self.sampling_rate != self.default_rate:
             X = resample(X, 10 * self.sampling_rate, axis=-1)
-        Y = sample["y"]
+        Y = self.label_from_path(self.files[index])
         X = torch.FloatTensor(X)
         return X, Y
     

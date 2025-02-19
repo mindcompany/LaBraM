@@ -51,21 +51,17 @@ def split_and_dump(params):
             raw = mne.io.read_raw_edf(file_path, preload=True)
             try:
                 if drop_channels is not None:
-                    useless_chs = []
-                    for ch in drop_channels:
-                        if ch in raw.ch_names:
-                            useless_chs.append(ch)
+                    useless_chs = list(set(drop_channels) & set(raw.ch_names))
                     raw.drop_channels(useless_chs)
-                if chOrder_standard is not None and len(chOrder_standard) == len(raw.ch_names):
+                if set(chOrder_standard) == set(raw.ch_names):
                     raw.reorder_channels(chOrder_standard)
-                if raw.ch_names != chOrder_standard:
-                    raise Exception("channel order is wrong!")
+
+                assert raw.ch_names == chOrder_standard, "channel order is wrong!"
 
                 raw.filter(l_freq=0.1, h_freq=75.0)
                 raw.notch_filter(50.0)
                 raw.resample(200, n_jobs=5)
 
-                ch_name = raw.ch_names
                 raw_data = raw.get_data(units='uV')
                 channeled_data = raw_data.copy()
             except:
@@ -152,6 +148,7 @@ if __name__ == "__main__":
         parameters.append([test_normal, test_sub, test_dump_folder, 0])
 
     # split and dump in parallel
-    with Pool(processes=24) as pool:
-        # Use the pool.map function to apply the square function to each element in the numbers list
-        result = pool.map(split_and_dump, parameters)
+    split_and_dump(parameters[0])
+    # with Pool(processes=24) as pool:
+    #     # Use the pool.map function to apply the square function to each element in the numbers list
+    #     result = pool.map(split_and_dump, parameters)
