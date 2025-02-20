@@ -24,6 +24,8 @@ from optim_factory import create_optimizer
 
 from engine_for_vqnsp import evaluate, train_one_epoch, calculate_codebook_usage
 from utils import NativeScalerWithGradNormCount as NativeScaler
+from dataset_maker.build_pretraining_dataset import build_pretraining_dataset
+from data_processor.dataset import ShockDataset
 import modeling_vqnsp
 import utils
 
@@ -145,26 +147,57 @@ def main(args):
     model = get_model(args)
 
     # get dataset
-    # datasets with the same montage can be packed within a sublist
-    datasets_train = [
-        ["path/to/dataset1", "path/to/dataset2"], # e.g., 64 channels for dataset1 and dataset2
-        ["path/to/dataset3", "path/to/dataset4"], # e.g., 32 channels for dataset3 and dataset4
+    # datasets with the same montage can be packed within a sublist <-- NOTE: Not necessary anymore! Just go ham.
+    # NOTE: hdf5s are built based on the number of channels. If you want to move a dataset from here to validation,
+    # you need to delete the hdf5s and remake them. 
+    datasets_train_tuh2500 = [
+        '/home/ubuntu/sami-workbench-az/tuh2500/hdf5/17channels.hdf5',
+        '/home/ubuntu/sami-workbench-az/tuh2500/hdf5/19channels.hdf5',
+        '/home/ubuntu/sami-workbench-az/tuh2500/hdf5/21channels.hdf5',
+        '/home/ubuntu/sami-workbench-az/tuh2500/hdf5/23channels.hdf5',
     ]
     # time window for each sublist in dataset_train
-    # to ensure the total sequence length be around 256 for each dataset
+    # to ensure the total sequence length be around 256 for each dataset <-- NOTE: Also not necessary! Just pass in sequence length.
     time_window = [
         4, # set the time window to 4 so that the sequence length is 4 * 64 = 256
         8, # set the time window to 8 so that the sequence length is 8 * 32 = 256
     ]
-    dataset_train_list, train_ch_names_list = utils.build_pretraining_dataset(datasets_train, time_window, stride_size=200)
+    sequence_length = 256
+    stride_size_seconds = 4
+    sampling_rate = 200
+    dataset_train_list: list[ShockDataset] = [
+        ShockDataset(
+            hdf5_paths=[dataset_path],
+            window_size_hz=sampling_rate * (sequence_length // num_channels),
+            stride_size_hz=stride_size_seconds * sampling_rate,
+            start_percentage=0.01, end_percentage=0.99
+        )
+        # NOTE Cheap way to get channels for now but ideally the shockdataset just takes sequence length and
+        # assumes edfs have been resampled to the right sampling rate and does all the calculations.
+        for dataset_path, num_channels in zip(
+            datasets_train_tuh2500,
+            [17, 19, 21, 23]
+        )
+    ]
 
     datasets_val = [
-        ["path/to/datasets_val"]
+        "/home/ubuntu/sami-workbench-az/tuh2500val/hdf5/23channels.hdf5"
     ]
     if args.disable_eval:
         dataset_val_list = None
     else:
-        dataset_val_list, val_ch_names_list = utils.build_pretraining_dataset(datasets_val, [4])
+        dataset_val_list: list[ShockDataset] = [
+            ShockDataset(
+                hdf5_paths=[dataset_path],
+                window_size_hz=sampling_rate * (sequence_length // num_channels),
+                stride_size_hz=stride_size_seconds * sampling_rate,
+                start_percentage=0.01, end_percentage=0.99
+            )
+            for dataset_path, num_channels in zip(
+                datasets_val,
+                [23]
+            )
+        ]
 
     if True:  # args.distributed:
         num_tasks = utils.get_world_size()
@@ -247,7 +280,6 @@ def main(args):
 
     total_batch_size = args.batch_size * utils.get_world_size()
     args.lr = total_batch_size / 128 * args.lr
-    print("LR = %.8f" % args.lr)
     print("Min LR = %.8f" % args.min_lr)
     print("Weigth Decay = %.8f" % args.weight_decay)
     print("Batch size = %d" % total_batch_size)
@@ -257,7 +289,8 @@ def main(args):
     optimizer = create_optimizer(args, model_without_ddp)
     loss_scaler = NativeScaler()
 
-    if args.distributed:
+    # if args.distributed:
+    if True: # NOTE Always use ddp since they dont handle the no ddp case downstream lmao
         model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu], find_unused_parameters=True)
         model_without_ddp = model.module
 
@@ -282,7 +315,7 @@ def main(args):
     start_time = time.time()
             
     for epoch in range(args.start_epoch, args.epochs):
-        if args.distributed:
+        if True: # args.distributed:
             for data_loader_train in data_loader_train_list:
                 data_loader_train.sampler.set_epoch(epoch)
         if log_writer is not None:
@@ -298,7 +331,7 @@ def main(args):
             log_writer=log_writer,
             start_steps=epoch * num_training_steps_per_epoch,
             lr_schedule_values=lr_schedule_values,
-            ch_names_list=train_ch_names_list,
+            ch_names_list=[dataset.get_ch_names() for dataset in dataset_train_list],
             args=args
         )
         if args.output_dir:
@@ -308,7 +341,9 @@ def main(args):
                 loss_scaler=loss_scaler, epoch=epoch, save_ckpt_freq=args.save_ckpt_freq)
         
         if data_loader_val_list is not None:
-            test_stats = evaluate(data_loader_val_list, model, device, log_writer, epoch, ch_names_list=val_ch_names_list, args=args)
+            test_stats = evaluate(data_loader_val_list, model, device, log_writer, epoch, ch_names_list=[
+                dataset.get_ch_names() for dataset in dataset_val_list
+            ], args=args)
             print(f"Validation loss of the network on the {sum([len(dataset) for dataset in dataset_val_list])} test EEG: {test_stats['loss']:.4f}")
 
             if log_writer is not None:
@@ -331,8 +366,29 @@ def main(args):
     total_time_str = str(datetime.timedelta(seconds=int(total_time)))
     print('Training time {}'.format(total_time_str))
 
-
 if __name__ == '__main__':
+    import sys
+    sys.argv[1:] = [
+        '--batch_size', '512',
+        '--epochs', '200',
+        '--save_ckpt_freq', '10',
+        '--model', 'vqnsp_encoder_base_decoder_3x200x12',
+        '--codebook_n_emd', '8192',
+        '--codebook_emd_dim', '64',
+        '--ema_decay', '0.99',
+        '--quantize_kmeans_init',
+        '--input_size', '1600',
+        '--opt', 'adamw',
+        '--clip_grad', '3.0',
+        '--weight_decay', '1e-4',
+        '--lr', '5e-5',
+        '--warmup_lr', '1e-6',
+        '--min_lr', '1e-5',
+        '--warmup_epochs', '20',
+        '--auto_resume',
+        # "--dist_on_itp",
+        '--output_dir', '/home/ubuntu/sami-workbench-az/LaBraM/checkpoints/mindco_pretrain/vqnsp'
+    ]
     opts = get_args()
     if opts.output_dir:
         Path(opts.output_dir).mkdir(parents=True, exist_ok=True)

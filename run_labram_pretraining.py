@@ -25,6 +25,8 @@ from optim_factory import create_optimizer
 from engine_for_pretraining import train_one_epoch
 from utils import NativeScalerWithGradNormCount as NativeScaler
 import utils
+from dataset_maker.build_pretraining_dataset import build_pretraining_dataset
+from data_processor.dataset import ShockDataset
 import modeling_pretrain
 import modeling_vqnsp
 
@@ -171,12 +173,11 @@ def main(args):
 
     # get dataset
     # datasets with the same montage can be packed within a sublist <-- NOTE: Not necessary anymore! Just go ham.
-    datasets_train = [
-        '/home/ubuntu/sami-workbench-az/tuh2500/raw/tuar/v3.0.1/',
-        '/home/ubuntu/sami-workbench-az/tuh2500/raw/tusl/v2.0.1/',
-        '/home/ubuntu/sami-workbench-az/tuh2500/raw/tuep/v2.0.1/',
-        '/home/ubuntu/sami-workbench-az/tuh2500/raw/tusz/edf/dev/',
-        '/home/ubuntu/sami-workbench-az/tuh2500/raw/tusz/edf/train/',
+    datasets_train_tuh2500 = [
+        '/home/ubuntu/sami-workbench-az/tuh2500/hdf5/17channels.hdf5',
+        '/home/ubuntu/sami-workbench-az/tuh2500/hdf5/19channels.hdf5',
+        '/home/ubuntu/sami-workbench-az/tuh2500/hdf5/21channels.hdf5',
+        '/home/ubuntu/sami-workbench-az/tuh2500/hdf5/23channels.hdf5',
     ]
     # time window for each sublist in dataset_train
     # to ensure the total sequence length be around 256 for each dataset <-- NOTE: Also not necessary! Just pass in sequence length.
@@ -184,14 +185,26 @@ def main(args):
         4, # set the time window to 4 so that the sequence length is 4 * 64 = 256
         8, # set the time window to 8 so that the sequence length is 8 * 32 = 256
     ]
+    sequence_length = 256
+    stride_size_seconds = 4
+    sampling_rate = 200
+    dataset_train_list: list[ShockDataset] = [
+        ShockDataset(
+            hdf5_paths=[dataset_path],
+            window_size_hz=sampling_rate * (sequence_length // num_channels),
+            stride_size_hz=stride_size_seconds * sampling_rate,
+            start_percentage=0.01, end_percentage=0.99
+        )
+        # NOTE Cheap way to get channels for now but ideally the shockdataset just takes sequence length and
+        # assumes edfs have been resampled to the right sampling rate and does all the calculations.
+        for dataset_path, num_channels in zip(
+            datasets_train_tuh2500,
+            [17, 19, 21, 23]
+        )
+    ]
 
-    dataset_train_list, train_ch_names_list = utils.build_pretraining_dataset(
-        datasets_train,
-        sequence_length=256,
-        stride_size_seconds=4,
-        start_percentage=0.03, end_percentage=0.97  # NOTE: I just made these up (paper does use this though).
-    )
     # prepare visual tokenizer
+    # NOTE This hardcodes the assumption that the tokenizer is already pre-trained. Do they use one out of the box?
     vqnsp = get_visual_tokenizer(args).to(device)
 
     if True:  # args.distributed:
@@ -241,7 +254,7 @@ def main(args):
     print("Number of training steps = %d" % num_training_steps_per_epoch)
     print("Number of training examples per epoch = %d" % (total_batch_size * num_training_steps_per_epoch))
 
-    if args.distributed:
+    if True: # args.distributed:
         model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu], find_unused_parameters=True)
         model_without_ddp = model.module
 
@@ -266,7 +279,7 @@ def main(args):
     print(f"Start training for {args.epochs} epochs")
     start_time = time.time()
     for epoch in range(args.start_epoch, args.epochs):
-        if args.distributed:
+        if True: # args.distributed:
             for data_loader_train in data_loader_train_list:
                 data_loader_train.sampler.set_epoch(epoch)
         if log_writer is not None:
@@ -279,7 +292,7 @@ def main(args):
             start_steps=epoch * num_training_steps_per_epoch,
             lr_schedule_values=lr_schedule_values,
             wd_schedule_values=wd_schedule_values,
-            ch_names_list=train_ch_names_list,
+            ch_names_list=[dataset.get_ch_names() for dataset in dataset_train_list],
             args=args,
         )
         if args.output_dir:
@@ -300,11 +313,33 @@ def main(args):
     total_time_str = str(datetime.timedelta(seconds=int(total_time)))
     print('Training time {}'.format(total_time_str))
 
-
 if __name__ == '__main__':
     import sys
     sys.argv[1:] = [
-        
+        '--batch_size', '192',
+        '--epochs', '50',
+        '--save_ckpt_freq', '10',
+        '--model', 'labram_base_patch200_1600_8k_vocab',
+        '--rel_pos_bias',
+        '--input_size', '1600',
+        '--drop_path', '0.1',
+        '--codebook_size', '8192',
+        '--codebook_dim', '64',
+        '--opt', 'adamw',
+        '--opt_eps', '1e-8',
+        '--weight_decay', '0.05',
+        '--lr', '5e-4',
+        '--warmup_lr', '1e-6',
+        '--min_lr', '1e-5',
+        '--warmup_epochs', '5',
+        '--tokenizer_model', 'vqnsp_encoder_base_decoder_3x200x12',
+        '--tokenizer_weight', '/home/ubuntu/sami-workbench-az/LaBraM/checkpoints/vqnsp.pth',
+        '--layer_scale_init_value', '0.1',
+        '--auto_resume',
+        '--num_workers', '10',
+        '--pin_mem',
+        '--gradient_accumulation_steps', '4',
+        '--output_dir', '/home/ubuntu/sami-workbench-az/LaBraM/checkpoints/labram_pretrain'
     ]
     opts = get_args()
     if opts.output_dir:

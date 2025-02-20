@@ -383,23 +383,28 @@ def all_gather_batch_with_grad(tensors):
 def _get_rank_env():
     if "RANK" in os.environ:
         return int(os.environ["RANK"])
-    else:
+    elif "OMPI_COMM_WORLD_RANK" in os.environ:
         return int(os.environ['OMPI_COMM_WORLD_RANK'])
+    else:
+        return 0
 
 
 def _get_local_rank_env():
     if "LOCAL_RANK" in os.environ:
         return int(os.environ["LOCAL_RANK"])
-    else:
+    elif "OMPI_COMM_WORLD_LOCAL_RANK" in os.environ:
         return int(os.environ['OMPI_COMM_WORLD_LOCAL_RANK'])
+    else:
+        return 0
 
 
 def _get_world_size_env():
     if "WORLD_SIZE" in os.environ:
         return int(os.environ["WORLD_SIZE"])
-    else:
+    elif "OMPI_COMM_WORLD_SIZE" in os.environ:
         return int(os.environ['OMPI_COMM_WORLD_SIZE'])
-
+    else:
+        return 1
 
 def init_distributed_mode(args):
     if args.dist_on_itp:
@@ -419,9 +424,18 @@ def init_distributed_mode(args):
         args.rank = int(os.environ['SLURM_PROCID'])
         args.gpu = args.rank % torch.cuda.device_count()
     else:
-        print('Not using distributed mode')
-        args.distributed = False
-        return
+        # Single GPU "fake distributed" setup
+        print('Setting up single-GPU fake distributed mode')
+        os.environ['MASTER_ADDR'] = 'localhost'
+        os.environ['MASTER_PORT'] = '12355'
+        os.environ['WORLD_SIZE'] = '1'
+        os.environ['RANK'] = '0'
+        os.environ['LOCAL_RANK'] = '0'
+        args.distributed = True
+        args.world_size = 1
+        args.rank = 0
+        args.gpu = 0
+        args.dist_url = 'env://'
 
     args.distributed = True
 
@@ -713,6 +727,8 @@ def create_ds_config(args):
 def get_input_chans(ch_names):
     input_chans = [0] # for cls token
     for ch_name in ch_names:
+        if '-' in ch_name:
+            ch_name = ch_name.split(' ')[1].split('-')[0]
         input_chans.append(standard_1020.index(ch_name) + 1)
     return input_chans
 

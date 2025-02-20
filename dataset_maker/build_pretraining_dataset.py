@@ -10,7 +10,7 @@ import inspect
 from pathlib import Path
 from functools import wraps
 from typing import Generator
-from toolz import pipe, filter, curry, keyfilter, complement, map
+from toolz import pipe, filter, curry, keyfilter, complement, map, take
 from toolz.curried import pipe, filter, mapcat, groupby, keyfilter, map
 
 from data_processor.dataset import ShockDataset
@@ -68,18 +68,17 @@ def can_bandpass_safely(l_freq: float, h_freq: float, sample: mne.io.RawArray) -
     return is_ok
 
 def edfs_from_dir(dir_path: Path) -> Generator[Path, None, None]:
-    yield from dir_path.glob('**/*.edf')
+    for p in dir_path.glob('**/*.edf'):
+        print(f'yielding {p}')
+        yield p
+    # yield from dir_path.glob('**/*.edf')
 
 def partial_load_sample(edf_path: Path) -> mne.io.RawArray:
     return mne.io.read_raw_edf(edf_path, preload=False)
 
 def num_valid_channels(edf: mne.io.RawArray) -> int:
     try: return len(filter_channels(edf).ch_names)
-    except Exception as e:
-        if isinstance(edf, int):
-            pass
-        print(f"Skipping due to error reading {edf}: {e}"); return 0
-    # TODO: handle particular exception when there are no matches 
+    except Exception as e: print(f"Skipping due to error reading {edf}: {e}"); return 0
 
 def hdf5_path_from_num_channels(num_channels: int) -> Path:
     return Path(HDF5_ROOT_PATH) / Path(f'{num_channels}channels.hdf5')
@@ -88,17 +87,26 @@ def channels_hdf5_exists(num_channels: int) -> bool:
     return hdf5_path_from_num_channels(num_channels).exists()
 
 @curry
+def take_percent(percent: float, edfs: list[mne.io.RawArray]) -> list[mne.io.RawArray]:
+    return take(int(len(edfs) * percent), edfs)
+
+@curry
 @cache_from_disk("./caches/")
-def parse_valid_edfs(sequence_length: int, l_freq: int, h_freq: int, dataset_dir: str) -> list[mne.io.RawArray]:
+def parse_valid_edfs(sequence_length: int, l_freq: int, h_freq: int, clip_to_percent: float, dataset_dir: str) -> list[mne.io.RawArray]:
+    # NOTE the caching implies that output needs to be deterministic. This means clip_to_percent cannot cause
+    # the edf filepaths to be shuffled. Since Path.glob does not guarantee consistent ordering, we sort the edfs.
+    # This exhausts the generator into a list, but should not affect performance.
+    assert clip_to_percent >= 0. and clip_to_percent <= 1.
     return pipe(
         Path(dataset_dir),
         edfs_from_dir,
+        sorted,
+        take_percent(clip_to_percent),
         map(partial_load_sample),
         filter(can_bandpass_safely(l_freq, h_freq)),
         filter(within_sequence_length(sequence_length, 30)),
         list
     )
-
 
 
 def build_pretraining_dataset(
@@ -107,12 +115,17 @@ def build_pretraining_dataset(
     stride_size_seconds: int,
     start_percentage: float, end_percentage: float=1,
     l_freq: int=L_FREQ_FILTER, h_freq: int=H_FREQ_FILTER,
-    sampling_rate: int=200
+    sampling_rate: int=200,
+    root_path: str = HDF5_ROOT_PATH,
+    clip_to_percent: float = 1.
 ) -> tuple[list[ShockDataset], list[list[str]]]:
+    global HDF5_ROOT_PATH
+    HDF5_ROOT_PATH = root_path
+
     # Keep all valid edfs
     valid_edfs: dict[int, list[mne.io.RawArray]] = pipe(
         dataset_dirs,
-        mapcat(parse_valid_edfs(sequence_length, l_freq, h_freq)),
+        mapcat(parse_valid_edfs(sequence_length, l_freq, h_freq, clip_to_percent)),
         groupby(num_valid_channels),  
         keyfilter(bool), # keep channels > 0
         dict
@@ -156,17 +169,31 @@ def build_pretraining_dataset(
 #     )
 
 if __name__ == '__main__':
+    ### NOTE Pretrain val
     build_pretraining_dataset(
         dataset_dirs=[
-            '/home/ubuntu/sami-workbench-az/tuh2500/raw/tuar/v3.0.1/',
-            '/home/ubuntu/sami-workbench-az/tuh2500/raw/tusl/v2.0.1/',
-            '/home/ubuntu/sami-workbench-az/tuh2500/raw/tuep/v2.0.1/',
-            '/home/ubuntu/sami-workbench-az/tuh2500/raw/tusz/edf/dev/',
-            '/home/ubuntu/sami-workbench-az/tuh2500/raw/tusz/edf/train/',
+            '/home/ubuntu/sami-workbench-az/tuh2500val/raw/tuab'
         ],
         sequence_length=256,
         stride_size_seconds=4,
         start_percentage=0.01,
         end_percentage=0.99,
-        l_freq=0.5
+        l_freq=0.5,
+        root_path='/home/ubuntu/sami-workbench-az/tuh2500val/hdf5',
+        clip_to_percent=0.2  # 20% of tuab 
     )
+    ### NOTE Pretrain
+    # build_pretraining_dataset(
+    #     dataset_dirs=[
+    #         '/home/ubuntu/sami-workbench-az/tuh2500/raw/tuar/v3.0.1/',
+    #         '/home/ubuntu/sami-workbench-az/tuh2500/raw/tusl/v2.0.1/',
+    #         '/home/ubuntu/sami-workbench-az/tuh2500/raw/tuep/v2.0.1/',
+    #         '/home/ubuntu/sami-workbench-az/tuh2500/raw/tusz/edf/dev/',
+    #         '/home/ubuntu/sami-workbench-az/tuh2500/raw/tusz/edf/train/',
+    #     ],
+    #     sequence_length=256,
+    #     stride_size_seconds=4,
+    #     start_percentage=0.01,
+    #     end_percentage=0.99,
+    #     l_freq=0.5
+    # )
